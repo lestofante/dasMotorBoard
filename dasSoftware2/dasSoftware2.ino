@@ -1,23 +1,28 @@
+#include <EEPROM.h>
+
 /*MOTER CANTRALLER
   oh_bother 2021
   punch me if you use this code, fucker
   
   
-  controls a DC brushed motor (ultradashshhhshshs)
+  controls a DC brushed motor (ultradash)
   using an attiny85 with an H bridge and inverting 
   transistors on the P channels so +5v = mosfet fun time.
   Input signa:
-  15ms start to start
-  1.5ms pulse Neutral
-  1.93ms pulse Full Throttle
-  1.03ms pulse Full Reverse
-  1.32ms special weenie reverse mode
-
-  actual serve:
   20ms start to start
   2ms full forward
   1ms full rev
   1.5 neutral
+  
+  receivers/transmitters/pulses/controllers all vary
+  so there's also a calibration mode if pin 1 of the 
+  tiny85 is set positive at boot.
+
+  LEDs indicate which function is calibrated and writes
+  to eeprom each time. neutral, fwd, rev, then radio off
+  user taps red LED (pin 1) high to get to next test
+
+  results stay in eeprom till forever.
   
   MOSFET order:
   Q1 Q2
@@ -27,56 +32,28 @@
   
   pinout:
   Pin7 (PB2)  Radio IN
-  Pin2 (PB3)  Q1
-  Pin3 (PB4)  Q2
+  Pin2 (PB3)  Q1 (fwd LED)
+  Pin3 (PB4)  Q2 (rev LED)
   Pin5 (PB0)  Q3
   Pin6 (PB1)  Q4
-  Pin1 (PB5)  brake LED
- 
-  program will receive a pulse every 15ms
-  that pulse will set states of mosfets
-  default state is neutral (no fets)
-  pwm to fets scaled from nothing to full on
-  brake activates Q3 and Q4 and brake LED
-  rev to neutral to rev(within 1 second)  = rev
+  Pin1 (PB5)  brake LED/user input
 
-  rewrite of this shit to make it not horrible
-
-  pulsein test:
-  frsky
-  1488-1490 neut
-  1936-1938 fwd
-  1024-1026 rev
-  1566 off
-  0 disconnected
-
-  das8ch
-  1494-1496 neut
-  1942-1944 fwd
-  1031-1032 rev
-  1492-1494 off (1508-1509 2nd test)
-  0 disconnected
+  TODO: Reverse logic is fuck
 */
 
 // ====== variables =========
+//version for eeprom
+const uint8_t secretNumber = 1;
+
 //pulse times in uS
-const int us_maxFwd = 2000;
-const int us_neutral = 1500;
-const int us_maxRev = 1000;
-const int us_dutyCycle = 21000; //timeout between pulses
 const int us_weenieRev = 1320; //I am weenie
-
-const int us_offset = 50;
-const int us_minFwd = us_neutral + us_offset;
-const int us_minRev = us_neutral - us_offset;
-const int us_partRev = us_maxRev - 20;
-
-//other timing
 const int ms_doubleTap = 1000; //time to rev in ms
 const int calibTimeOut = 1000; //time to set pin 1 low
+const int us_dutyCycle = 30000; //timeout between pulses
+const int us_offset = 20;
 
-//other settings
-const int analogRes = 255;
+const uint16_t ms_revTime = 1000;
+const uint8_t no_taps = 2;
 
 //pins
 const int pin_Q1 = 3;
@@ -87,16 +64,22 @@ const int pin_Q4 = 1;
 const int pin_radio = 2;
 const int pin_brakeLED = 5;
 
-//vars
-const uint16_t revTime = 1000;
-const uint8_t revTapsNo = 2;
-int revTimer = 0;
-uint8_t revTaps = 0;
-uint8_t revPrev = 0;
-bool reverseOK = 0;
+//settings/vars
+uint16_t us_maxFwd = 2000;
+uint16_t us_neutral = 1500;
+uint16_t us_maxRev = 1000;
+uint16_t us_radOff = 1493;
 
-uint8_t mappedSpeed = 0;
-unsigned long pulseTime = 0;
+uint16_t us_minFwd = us_neutral + us_offset;
+uint16_t us_minRev = us_neutral - us_offset;
+uint16_t us_partRev = us_maxRev - 20;
+
+uint8_t ms_loopTime = 20;
+
+//vars
+int ms_revTimer = 0;
+uint8_t no_revTaps = 0;
+bool flag_rev = 0;
 
 // ====== setup =========
 void setup() {
@@ -105,8 +88,8 @@ void setup() {
   pinMode(pin_Q2,OUTPUT);
   pinMode(pin_Q3,OUTPUT);
   pinMode(pin_Q4,OUTPUT);
-  pinMode(pin_brakeLED, INPUT_PULLUP);
-
+  
+  pinMode(pin_brakeLED, INPUT);
   pinMode(pin_radio, INPUT);
 
   //initial pin states
@@ -116,90 +99,100 @@ void setup() {
   digitalWrite(pin_Q4, LOW);
 
   //hold pin low from start
-  if(digitalRead(pin_brakeLED) == LOW){
+  if(digitalRead(pin_brakeLED)){
     calibMode();
   }
 
   //reset pin, continue
   pinMode(pin_brakeLED, OUTPUT);
 
-  //load progmem
+  //check and load eeprom
   varInit();
+
+  //done
   flashies(2);
 }
 
 // ====== loop =========
 void loop() {
   //get pulse time
-  pulseTime = pulseIn(pin_radio, HIGH);
-    
-  if(pulseTime == 0){
+  uint16_t us_pulseTime = pulseIn(pin_radio, HIGH, us_dutyCycle);
+
+  //radio disconnected
+  if(us_pulseTime == 0 || us_pulseTime == us_radOFF){
     neutral();
-    revCheck(0);
-  }else if(pulseTime <= us_minFwd && pulseTime >= us_minRev){
+    flashies(1);
+
+  //pulse is neutral
+  }else if((us_pulseTime <= us_minFwd) && (us_pulseTime >= us_minRev)){
+    if(ms_revTimer == 0){no_revTaps = 0;}
+
+    //last state was reverse
+    if(flag_rev){
+      if(no_revTaps == 1){ms_revTimer = ms_revTime;}
+      if(no_revTaps == no_taps+1){no_revTaps = 0; ms_revTimer = 0;}
+      no_revTaps++;
+    }
+    flag_rev = 0;
     neutral(); 
-    revCheck(1);
-  }else if(pulseTime <= us_minRev && reverseOK){
-    mappedSpeed = constrain(pulseTime, us_weenieRev , us_maxRev);
-    mappedSpeed = map(mappedSpeed, us_minRev, us_maxRev, 255, 0);
-    reverse(mappedSpeed);
-    revCheck(1);
-  }else if(pulseTime <= us_minRev){
-    mappedSpeed = constrain(pulseTime, us_maxRev , 0);
-    mappedSpeed = map(mappedSpeed, us_maxRev, us_minRev, 255, 0);
-    brake(mappedSpeed);
-    if(pulseTime <= us_partRev){revCheck(2);}else{revCheck(3);}
-  }else if(pulseTime >= us_minFwd){
-    mappedSpeed = constrain(pulseTime, 0 , us_maxFwd);
-    mappedSpeed = map(mappedSpeed, us_minFwd, us_maxFwd, 0, 255);
-    forward(mappedSpeed);
-    revCheck(0);
+
+  //pulse is reverse
+  }else if((us_pulseTime <= us_minRev)){
+    if(revTaps == tapNum+1){
+      reverse(us_pulseTime);
+    }else if(revTaps <= tapNum){
+      brake(us_pulseTime);
+    }
+    flag_rev = 1;
+
+  //pulse is forward
+  }else if(us_pulseTime >= us_minFwd){
+    flag_rev = 0;
+    ms_revTimer = 0;
+    no_revTaps = 0;
+    forward(us_pulseTime);
   }
 
+  //deduct timer
+  revTimer = constrain(revTimer - loopTime, 0, revTime);
   delay(4);
-}
-
-//uses passed in state to work the reverse flag
-void revCheck(int checkNo){
-
-//0 is reset
-//1 is neutral
-//2 is brake
-//3 is trigger'd
-
-//0 if more than 1s has passed triggered
-//3 to 1 to 3 to 1, within timer, rev ok
-const uint16_t revTime = 1000;
-const uint8_t revTapsNo = 2;
-uint8_t revTaps = 0;
-uint8_t revPrev = 0;
-uint16_t revTimer = 0;
-
-  revTimer = revTimer - (us_DutyCycle/1000); //approx cycle time
-  revTimer = constrain(revTimer, 0, revTime); 
-  
-  //did checkNo Change?
-  if(revPrev == checkNo){return;}
-  if(revPrev == 3 && checkNo == 1){revTaps++;}
-  if(revPrev == 1 && checkNo == 3){revTimer = revTime;}
-  if(revPrev == 0){revTaps = 0;}
-  
-  revPrev = checkNo;
 }
 
 // ====== functions =========
 //load values from progmem
 void varInit(){
-  //global_variable = sets[arrayloc]
+  uint8_t promV = 0;
+  EEPROM.get(8, promV)
+
+  //nums match, load the saved settings
+  //this will default to the header settings
+  if(promV == secretNumber){
+    EEPROM.get(0, us_maxFwd);
+    EEPROM.get(2, us_neutral);
+    EEPROM.get(4, us_maxRev);
+    EEPROM.get(6, us_radOff);
+  }
+  
+  us_minFwd = us_neutral + us_offset;
+  us_minRev = us_neutral - us_offset;
+  us_partRev = us_maxRev - 20;
 }
 
 void writeCalib(){
-  //const PROGMEM uint16_t sets[] = {global_variable, global_variable1, etc}
-  delay(1000);  
+  //just write all of them at once
+  EEPROM.put(0, us_maxFwd);
+  EEPROM.put(2, us_neutral);
+  EEPROM.put(4, us_maxRev);
+  EEPROM.put(6, us_radOff); 
+
+  EEPROM.put(8, secretNumber);
+
+  //red says wrote
+  flashies(2);
 }
 
 //flashes brake LED, each flash is 400ms
-void flashies(int i){
+void flashies(uint8_t i){
   while(i){
     digitalWrite(pin_brakeLED, HIGH);
     delay(200);
@@ -224,89 +217,239 @@ void neutral(){
   digitalWrite(pin_brakeLED, LOW);
 }
 
-void forward(uint8_t rate){
+void forward(uint16_t rate){
   digitalWrite(pin_Q1, 1);
   digitalWrite(pin_Q2, 0);
   digitalWrite(pin_Q3, 0);
   digitalWrite(pin_Q4, 0);
-  
+    
+//  uint8_t mappedSpeed = 0;
+
+//  mappedSpeed = constrain(rate, 0 , us_maxFwd);
+//  mappedSpeed = map(mappedSpeed, us_minFwd, us_maxFwd, 0, 255);
+
 //  digitalWrite(pin_Q1, 0);
-//  analogWrite(pin_Q2, rate);
+//  analogWrite(pin_Q2, 1);
 //  digitalWrite(pin_Q3, 0);
 //  analogWrite(pin_Q4, rate);
 
   digitalWrite(pin_brakeLED, LOW);
 }
 
-void brake(uint8_t rate){
+void brake(uint16_t rate){
   digitalWrite(pin_Q1, 0);
   digitalWrite(pin_Q2, 1);
   digitalWrite(pin_Q3, 0);
   digitalWrite(pin_Q4, 0);
+  
+//  uint8_t mappedSpeed = 0;
+
+//  mappedSpeed = constrain(rate, us_maxRev , 0);
+//  mappedSpeed = map(mappedSpeed, us_maxRev, us_minRev, 255, 0);
 
 //  digitalWrite(pin_Q1, 0);
 //  digitalWrite(pin_Q2, 0);
-//  analogWrite(pin_Q3, rate);
-//  analogWrite(pin_Q4, rate);
+//  analogWrite(pin_Q3, 1);
+//  analogWrite(pin_Q4, mappedSpeed);
 
 //  digitalWrite(pin_brakeLED, HIGH);
   digitalWrite(pin_brakeLED, LOW);
 }
 
-void reverse(uint8_t rate){
+void reverse(uint16_t rate){
   digitalWrite(pin_Q1, 0);
   digitalWrite(pin_Q2, 0);
   digitalWrite(pin_Q3, 1);
   digitalWrite(pin_Q4, 0);
+    
+//  uint8_t mappedSpeed = 0;
   
-//  analogWrite(pin_Q1, rate);
+//  mappedSpeed = constrain(rate, us_weenieRev , us_maxRev);
+//  mappedSpeed = map(mappedSpeed, us_minRev, us_maxRev, 255, 0);
+  
+//  analogWrite(pin_Q1, 1);
 //  digitalWrite(pin_Q2, 0);
-//  analogWrite(pin_Q3, rate);
+//  analogWrite(pin_Q3, , mappedSpeed);
 //  digitalWrite(pin_Q4, 0);
 
   digitalWrite(pin_brakeLED, LOW);
 }
 
 void calibMode(){
-  pinMode(pin_brakeLED, OUTPUT);
- 
-  flashies(12); //time to release gnd
-  delay(1000); //done flipping out
-  flashies(1); //1st calib
+  //for later: detect input instead of tapping
 
+  //wait for user release
+  while(digitalRead(pin_brakeLED)){}
+ 
   neutralCalib();
-  flashies(2);
+  writeCalib();
 
   fwdCalib();
-  flashies(3);
-
-  revCalib();
-  flashies(4);
+  writeCalib();
 
   revCalib();
   writeCalib();
+
+  offCalib();
+  writeCalib();
+
+  //happy done dance
+  uint8_t i = 3;
+  while(i){
+    digitalWrite(pin_Q1, HIGH);
+    delay(50);
+    digitalWrite(pin_Q1, LOW);
+    delay(50);
+    digitalWrite(pin_Q2, HIGH);
+    delay(50);
+    digitalWrite(pin_Q2, LOW);
+    delay(50);
+    digitalWrite(pin_Q3, HIGH);
+    delay(50);
+    digitalWrite(pin_Q3, LOW);
+    delay(50);
+    i--;
+  }
+  
   flashies(5); //done
 }
 
 void neutralCalib(){
-  delay(1000);
+  //ready input
+  pinMode(pin_brakeLED, INPUT);
+  
+  //indicate neutral test, brake and fwd flash
+  while(!digitalRead(pin_brakeLED)){ 
+    digitalWrite(pin_Q1, HIGH);
+    digitalWrite(pin_Q2, HIGH);
+    delay(100);
+    digitalWrite(pin_Q1, LOW);
+    digitalWrite(pin_Q2, LOW);
+    delay(100);
+  }
+
+  //user released, acknowledge
+  uint8_t i = 8; // for flashies
+  while(i){
+    digitalWrite(pin_Q1, HIGH);
+    digitalWrite(pin_Q2, HIGH);
+    delay(100);
+    digitalWrite(pin_Q1, LOW);
+    digitalWrite(pin_Q2, LOW);
+    delay(100);
+    i--;
+  }
+
+  //set back output
+  pinMode(pin_brakeLED, OUTPUT);
+  
+  us_neutral = pulseAvgr();
 }
 
 void fwdCalib(){
-  delay(1000);  
+  //ready input
+  pinMode(pin_brakeLED, INPUT);
+  
+  //indicate fwd test
+  while(!digitalRead(pin_brakeLED)){ 
+    digitalWrite(pin_Q1, HIGH);
+    delay(100);
+    digitalWrite(pin_Q1, LOW);
+    delay(100);
+  }
+
+  //user released, acknowledge
+  uint8_t i = 8;   
+  while(i){
+    digitalWrite(pin_Q1, HIGH);
+    delay(100);
+    digitalWrite(pin_Q1, LOW);
+    delay(100);
+    i--;
+  }
+
+  //set back output
+  pinMode(pin_brakeLED, OUTPUT);
+  
+  us_maxFwd = pulseAvgr();  
 }
 
 void revCalib(){
-  delay(1000);  
+  //ready input
+  pinMode(pin_brakeLED, INPUT);
+  
+  //indicate rev test
+  while(!digitalRead(pin_brakeLED)){ 
+    digitalWrite(pin_Q2, HIGH);
+    delay(100);
+    digitalWrite(pin_Q2, LOW);
+    delay(100);
+  }
+
+  //user released, acknowledge
+  uint8_t i = 8;
+  while(i){
+    digitalWrite(pin_Q2, HIGH);
+    delay(100);
+    digitalWrite(pin_Q2, LOW);
+    delay(100);
+    i--;
+  }
+
+  //set back input
+  pinMode(pin_brakeLED, OUTPUT);
+  
+  us_maxRev = pulseAvgr();  
 }
 
 void offCalib(){
-  delay(1000);  
+  //ready input
+  pinMode(pin_brakeLED, INPUT);
+  
+  //indicate radio off test
+  i=8;
+  while(!digitalRead(pin_brakeLED)){
+    digitalWrite(pin_Q1, HIGH);
+    digitalWrite(pin_Q2, LOW);
+    delay(100);
+    digitalWrite(pin_Q1, LOW);
+    digitalWrite(pin_Q2, HIGH);
+    delay(100);
+    i--;
+  }
+
+  //set back early
+  pinMode(pin_brakeLED, OUTPUT);
+  
+  //acknowledge input, with red to indicate OFF?
+  i=8;
+  while(i){
+    digitalWrite(pin_Q1, HIGH);
+    digitalWrite(pin_brakeLED, LOW);
+    delay(100);
+    digitalWrite(pin_Q1, LOW);
+    digitalWrite(pin_brakeLED, HIGH);
+    delay(100);
+    i--;
+  }
+
+  //reset LEDs after wig wag
+  digitalWrite(pin_Q1, LOW);
+  digitalWrite(pin_brakeLED, LOW);
+
+  
+  us_radOff = pulseAvgr();
 }
 
-unsigned long pulseAvgr(){
-  //get pulse time
-  unsigned long pulseTime = pulseIn(pin_radio, HIGH);
+uint16_t pulseAvgr(){
+  int i = 50;
+  uint16_t meanTime = pulseIn(pin_radio, HIGH, us_dutyCycle);
   
-  return pulseTime;
+  while(i){
+    pulseTime = pulseIn(pin_radio, HIGH, us_dutyCycle);
+    meanTime = (0.9*meanTime) + (0.1*pulseTime);
+    i--;
+  }
+  
+  return meanTime;
 }
