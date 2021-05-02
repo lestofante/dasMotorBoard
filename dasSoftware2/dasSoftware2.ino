@@ -4,7 +4,6 @@
   oh_bother 2021
   punch me if you use this code, fucker
   
-  
   controls a DC brushed motor (ultradash)
   using an attiny85 with an H bridge and inverting 
   transistors on the P channels so +5v = mosfet fun time.
@@ -43,7 +42,7 @@
 
 // ====== variables =========
 //version for eeprom
-const uint8_t secretNumber = 1;
+const uint8_t no_secret = 1;
 
 //pulse times in uS
 const int us_weenieRev = 1320; //I am weenie
@@ -119,7 +118,7 @@ void loop() {
   uint16_t us_pulseTime = pulseIn(pin_radio, HIGH, us_dutyCycle);
 
   //radio disconnected
-  if(us_pulseTime == 0 || us_pulseTime == us_radOFF){
+  if(us_pulseTime == 0 || us_pulseTime == us_radOff){
     neutral();
     flashies(1);
 
@@ -138,9 +137,9 @@ void loop() {
 
   //pulse is reverse
   }else if((us_pulseTime <= us_minRev)){
-    if(revTaps == tapNum+1){
+    if(no_revTaps == no_taps+1){
       reverse(us_pulseTime);
-    }else if(revTaps <= tapNum){
+    }else if(no_revTaps <= no_taps){
       brake(us_pulseTime);
     }
     flag_rev = 1;
@@ -154,19 +153,19 @@ void loop() {
   }
 
   //deduct timer
-  revTimer = constrain(revTimer - loopTime, 0, revTime);
+  ms_revTimer = constrain(ms_revTimer - ms_loopTime, 0, ms_revTime);
   delay(4);
 }
 
 // ====== functions =========
 //load values from progmem
 void varInit(){
-  uint8_t promV = 0;
-  EEPROM.get(8, promV)
+  uint8_t no_promV = 0;
+  EEPROM.get(8, no_promV);
 
   //nums match, load the saved settings
   //this will default to the header settings
-  if(promV == secretNumber){
+  if(no_promV == no_secret){
     EEPROM.get(0, us_maxFwd);
     EEPROM.get(2, us_neutral);
     EEPROM.get(4, us_maxRev);
@@ -185,7 +184,7 @@ void writeCalib(){
   EEPROM.put(4, us_maxRev);
   EEPROM.put(6, us_radOff); 
 
-  EEPROM.put(8, secretNumber);
+  EEPROM.put(8, no_secret);
 
   //red says wrote
   flashies(2);
@@ -407,7 +406,7 @@ void offCalib(){
   pinMode(pin_brakeLED, INPUT);
   
   //indicate radio off test
-  i=8;
+  uint8_t i=8;
   while(!digitalRead(pin_brakeLED)){
     digitalWrite(pin_Q1, HIGH);
     digitalWrite(pin_Q2, LOW);
@@ -443,13 +442,13 @@ void offCalib(){
 
 uint16_t pulseAvgr(){
   int i = 50;
-  uint16_t meanTime = pulseIn(pin_radio, HIGH, us_dutyCycle);
+  uint16_t us_meanTime = pulseIn(pin_radio, HIGH, us_dutyCycle);
   
   while(i){
-    pulseTime = pulseIn(pin_radio, HIGH, us_dutyCycle);
-    meanTime = (0.9*meanTime) + (0.1*pulseTime);
+    uint16_t us_pulseTime = pulseIn(pin_radio, HIGH, us_dutyCycle);
+    us_meanTime = (0.9*us_meanTime) + (0.1*us_pulseTime);
     i--;
   }
   
-  return meanTime;
+  return us_meanTime;
 }
