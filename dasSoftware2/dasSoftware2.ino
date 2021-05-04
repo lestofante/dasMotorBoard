@@ -49,7 +49,7 @@ const int us_weenieRev = 1320; //I am weenie
 const int ms_doubleTap = 1000; //time to rev in ms
 const int calibTimeOut = 1000; //time to set pin 1 low
 const int us_dutyCycle = 30000; //timeout between pulses
-const int us_offset = 20;
+const int us_offset = 250;
 
 const uint16_t ms_revTime = 1000;
 const uint8_t no_taps = 2;
@@ -72,9 +72,6 @@ uint16_t us_radOff = 1493;
 
 uint16_t us_minFwd = us_neutral + us_offset;
 uint16_t us_minRev = us_neutral - us_offset;
-uint16_t us_partRev = us_maxRev - 20;
-
-
 
 //vars
 int ms_revTimer = 0;
@@ -119,10 +116,9 @@ void loop() {
   uint16_t us_pulseTime = pulseIn(pin_radio, HIGH, us_dutyCycle);
 
   //radio disconnected
-  if(us_pulseTime == 0 || us_pulseTime == us_radOff + 1 ||us_pulseTime == us_radOff - 1 ){
-    flag_rev = false;
+  if(us_pulseTime == 0 || us_pulseTime == us_radOff + 2 ||us_pulseTime == us_radOff - 2 ){
+    //flag_rev = false;
     neutral();
-    flashies(1);
 
   //pulse is neutral
   }else if((us_pulseTime <= us_minFwd) && (us_pulseTime >= us_minRev)){
@@ -135,7 +131,7 @@ void loop() {
       }
       
       if(no_revTaps == no_taps+1){
-        no_revTaps = 0; 
+        //no_revTaps = 0; 
         ms_revTimer = 0;
       }else{
         no_revTaps++;  
@@ -185,7 +181,6 @@ void varInit(){
   
   us_minFwd = us_neutral + us_offset;
   us_minRev = us_neutral - us_offset;
-  us_partRev = us_maxRev - 20;
 }
 
 void writeCalib(){
