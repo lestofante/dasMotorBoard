@@ -53,6 +53,7 @@ const int us_offset = 20;
 
 const uint16_t ms_revTime = 1000;
 const uint8_t no_taps = 2;
+const uint8_t ms_loopTime = 20;
 
 //pins
 const int pin_Q1 = 3;
@@ -73,12 +74,12 @@ uint16_t us_minFwd = us_neutral + us_offset;
 uint16_t us_minRev = us_neutral - us_offset;
 uint16_t us_partRev = us_maxRev - 20;
 
-uint8_t ms_loopTime = 20;
+
 
 //vars
 int ms_revTimer = 0;
 uint8_t no_revTaps = 0;
-bool flag_rev = 0;
+bool flag_rev = false;
 
 // ====== setup =========
 void setup() {
@@ -118,7 +119,8 @@ void loop() {
   uint16_t us_pulseTime = pulseIn(pin_radio, HIGH, us_dutyCycle);
 
   //radio disconnected
-  if(us_pulseTime == 0 || us_pulseTime == us_radOff){
+  if(us_pulseTime == 0 || us_pulseTime == us_radOff + 1 ||us_pulseTime == us_radOff - 1 ){
+    flag_rev = false;
     neutral();
     flashies(1);
 
@@ -128,25 +130,34 @@ void loop() {
 
     //last state was reverse
     if(flag_rev){
-      if(no_revTaps == 1){ms_revTimer = ms_revTime;}
-      if(no_revTaps == no_taps+1){no_revTaps = 0; ms_revTimer = 0;}
-      no_revTaps++;
+      if(no_revTaps == 1){
+        ms_revTimer = ms_revTime;
+      }
+      
+      if(no_revTaps == no_taps+1){
+        no_revTaps = 0; 
+        ms_revTimer = 0;
+      }else{
+        no_revTaps++;  
+      }
+
     }
-    flag_rev = 0;
+    flag_rev = false;
     neutral(); 
 
   //pulse is reverse
   }else if((us_pulseTime <= us_minRev)){
-    if(no_revTaps == no_taps+1){
+    if(no_revTaps == no_taps){
       reverse(us_pulseTime);
-    }else if(no_revTaps <= no_taps){
+    }else if(no_revTaps < no_taps){
       brake(us_pulseTime);
     }
-    flag_rev = 1;
+    
+    flag_rev = true;
 
   //pulse is forward
   }else if(us_pulseTime >= us_minFwd){
-    flag_rev = 0;
+    flag_rev = false;
     ms_revTimer = 0;
     no_revTaps = 0;
     forward(us_pulseTime);
