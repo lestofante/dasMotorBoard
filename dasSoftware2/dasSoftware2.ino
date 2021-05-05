@@ -48,13 +48,14 @@ const int us_weenieRev = 1320; //I am weenie
 const int ms_doubleTap = 1000; //time to rev in ms
 const int calibTimeOut = 1000; //time to set pin 1 low
 const int us_dutyCycle = 30000; //timeout between pulses
-const int us_offset = 20;
+const int us_maxOffset = 50; //my controller doesn't hit max consistently
+const int us_neutOffset = 20; //dead zone for neutral again consistentency
 
-const uint16_t ms_revTime = 2000;
-const uint16_t ms_trigTime = 350;
-const uint8_t no_taps = 2;
-const uint8_t ms_loopTime = 20;
-const uint8_t no_timeOuts = 10; //number of timeouts to neut
+const uint16_t ms_revTime = 2000; //time reverse is active
+const uint16_t ms_trigTime = 450; //time to double tap to start rev timer
+const uint8_t no_taps = 2; //how many taps to get into rev
+const uint8_t ms_loopTime = 20; //approx how long is the loop
+const uint8_t no_timeOuts = 10; //number of timeouts to safe the controller
 
 //pins
 const int pin_Q1 = 3;
@@ -71,8 +72,8 @@ uint16_t us_neutral = 1500;
 uint16_t us_maxRev = 1000;
 uint16_t us_radOff = 1493;
 
-uint16_t us_minFwd = us_neutral + us_offset;
-uint16_t us_minRev = us_neutral - us_offset;
+uint16_t us_minFwd = us_neutral + us_neutOffset;
+uint16_t us_minRev = us_neutral - us_neutOffset;
 
 //vars
 int ms_revTimer = 0;
@@ -193,8 +194,8 @@ void varInit(){
     EEPROM.get(6, us_radOff);
   }
   
-  us_minFwd = us_neutral + us_offset;
-  us_minRev = us_neutral - us_offset;
+  us_minFwd = us_neutral + us_neutOffset;
+  us_minRev = us_neutral - us_neutOffset;
 }
 
 void writeCalib(){
@@ -247,6 +248,11 @@ void forward(uint16_t rate){
   mappedSpeed = constrain(rate, us_minFwd , us_maxFwd);
   mappedSpeed = map(mappedSpeed, us_minFwd, us_maxFwd, 0, 255);
 
+  //full fwd
+  if(mappedSpeed >= us_maxRev-us_maxOffset){
+    mappedSpeed = 255;
+  }
+
   digitalWrite(pin_Q1, 1);
   digitalWrite(pin_Q2, 0);
   digitalWrite(pin_Q3, 0);
@@ -266,6 +272,11 @@ void brake(uint16_t rate){
   mappedSpeed = constrain(rate, us_maxRev, us_minRev);
   mappedSpeed = 255 - map(mappedSpeed, us_maxRev, us_minRev, 0, 255);
 
+  //full fwd
+  if(mappedSpeed >= us_maxRev - us_maxOffset){
+    mappedSpeed = 255;
+  }
+
   digitalWrite(pin_Q1, 0);
   digitalWrite(pin_Q2, 0);
   digitalWrite(pin_Q3, 1);
@@ -283,7 +294,8 @@ void reverse(uint16_t rate){
   uint16_t mappedSpeed = 0;
     
   //weenieRev goes here
-  mappedSpeed = constrain(rate, us_maxRev , us_minRev);
+  //mappedSpeed = constrain(rate, us_maxRev , us_minRev);
+  mappedSpeed = constrain(rate, us_weenieRev , us_minRev);
   mappedSpeed = 255 - map(mappedSpeed, us_maxRev, us_minRev, 0, 255);
   
   digitalWrite(pin_Q1, 0);
@@ -321,9 +333,9 @@ void calibMode(){
     delay(50);
     digitalWrite(pin_Q2, LOW);
     delay(50);
-    digitalWrite(pin_Q3, HIGH);
+    digitalWrite(pin_brakeLED, HIGH);
     delay(50);
-    digitalWrite(pin_Q3, LOW);
+    digitalWrite(pin_brakeLED, LOW);
     delay(50);
     i--;
   }
