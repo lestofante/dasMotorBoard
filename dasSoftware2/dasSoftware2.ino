@@ -44,13 +44,14 @@
 
 // ====== variables =========
 //version for eeprom
-const uint8_t no_secret = 0;
+const uint8_t no_secret = 2;
 
 //pulse times in uS
+const unsigned long no_timeScale = 64; //number to correct for pwm scale (64 to 1)
 const int us_weenieRev = 1320; //I am weenie
 const int ms_doubleTap = 1000; //time to rev in ms
 const int calibTimeOut = 1000; //time to set pin 1 low
-const int us_dutyCycle = 30000; //timeout between pulses
+const unsigned long us_dutyCycle = 30000; //timeout between pulses
 const int us_neutOffset = 20; //dead zone for neutral again consistentency
 
 const uint16_t ms_revTime = 2000; //time reverse is active
@@ -90,6 +91,9 @@ ResponsiveAnalogRead analog(0, true);
 
 // ====== setup =========
 void setup() {
+  //set PWM Freq ya freak
+  TCCR0B = TCCR0B & 0b11111000 | 0b001;
+  
   //pins
   pinMode(pin_Q1,OUTPUT);
   pinMode(pin_Q2,OUTPUT);
@@ -123,8 +127,12 @@ void setup() {
 // ====== loop =========
 void loop() {
   //get pulse time
-  uint16_t us_pulseTime = pulseIn(pin_radio, HIGH, us_dutyCycle);
+  uint16_t us_pulseTime = pulseIn(pin_radio, HIGH, (us_dutyCycle*no_timeScale)) / no_timeScale;
 
+  digitalWrite(pin_Q2, HIGH);
+  delayMicroseconds(us_maxRev * no_timeScale);
+  digitalWrite(pin_Q2, LOW);
+  
   //neutral if read bad or transmitter off
   if(us_pulseTime == 0 || us_pulseTime == us_radOff + 2 || us_pulseTime == us_radOff - 2){
     if(no_timeOutCount == no_timeOuts){
@@ -180,7 +188,7 @@ void loop() {
 
   //deduct timer
   ms_revTimer = constrain(ms_revTimer - ms_loopTime, 0, 0x7FFF);
-  delay(4);
+  delay(4 * no_timeScale);
 }
 
 // ====== functions =========
@@ -219,9 +227,9 @@ void writeCalib(){
 void flashies(uint8_t i){
   while(i){
     digitalWrite(pin_brakeLED, HIGH);
-    delay(200);
+    delay(200 * no_timeScale);
     digitalWrite(pin_brakeLED, LOW);
-    delay(200);
+    delay(200 * no_timeScale);
     i--;
   }
 }
@@ -330,17 +338,17 @@ void calibMode(){
   uint8_t i = 3;
   while(i){
     digitalWrite(pin_Q1, HIGH);
-    delay(50);
+    delay(50 * no_timeScale);
     digitalWrite(pin_Q1, LOW);
-    delay(50);
+    delay(50 * no_timeScale);
     digitalWrite(pin_Q2, HIGH);
-    delay(50);
+    delay(50 * no_timeScale);
     digitalWrite(pin_Q2, LOW);
-    delay(50);
+    delay(50 * no_timeScale);
     digitalWrite(pin_brakeLED, HIGH);
-    delay(50);
+    delay(50 * no_timeScale);
     digitalWrite(pin_brakeLED, LOW);
-    delay(50);
+    delay(50 * no_timeScale);
     i--;
   }
   
@@ -355,10 +363,10 @@ void neutralCalib(){
   while(!digitalRead(pin_brakeLED)){ 
     digitalWrite(pin_Q1, HIGH);
     digitalWrite(pin_Q2, HIGH);
-    delay(100);
+    delay(100 * no_timeScale);
     digitalWrite(pin_Q1, LOW);
     digitalWrite(pin_Q2, LOW);
-    delay(100);
+    delay(100 * no_timeScale);
   }
 
   //user released, acknowledge
@@ -366,10 +374,10 @@ void neutralCalib(){
   while(i){
     digitalWrite(pin_Q1, HIGH);
     digitalWrite(pin_Q2, HIGH);
-    delay(100);
+    delay(100 * no_timeScale);
     digitalWrite(pin_Q1, LOW);
     digitalWrite(pin_Q2, LOW);
-    delay(100);
+    delay(100 * no_timeScale);
     i--;
   }
 
@@ -386,18 +394,18 @@ void fwdCalib(){
   //indicate fwd test
   while(!digitalRead(pin_brakeLED)){ 
     digitalWrite(pin_Q1, HIGH);
-    delay(100);
+    delay(100 * no_timeScale);
     digitalWrite(pin_Q1, LOW);
-    delay(100);
+    delay(100 * no_timeScale);
   }
 
   //user released, acknowledge
   uint8_t i = 8;   
   while(i){
     digitalWrite(pin_Q1, HIGH);
-    delay(100);
+    delay(100 * no_timeScale);
     digitalWrite(pin_Q1, LOW);
-    delay(100);
+    delay(100 * no_timeScale);
     i--;
   }
 
@@ -414,18 +422,18 @@ void revCalib(){
   //indicate rev test
   while(!digitalRead(pin_brakeLED)){ 
     digitalWrite(pin_Q2, HIGH);
-    delay(100);
+    delay(100 * no_timeScale);
     digitalWrite(pin_Q2, LOW);
-    delay(100);
+    delay(100 * no_timeScale);
   }
 
   //user released, acknowledge
   uint8_t i = 8;
   while(i){
     digitalWrite(pin_Q2, HIGH);
-    delay(100);
+    delay(100 * no_timeScale);
     digitalWrite(pin_Q2, LOW);
-    delay(100);
+    delay(100 * no_timeScale);
     i--;
   }
 
@@ -444,10 +452,10 @@ void offCalib(){
   while(!digitalRead(pin_brakeLED)){
     digitalWrite(pin_Q1, HIGH);
     digitalWrite(pin_Q2, LOW);
-    delay(100);
+    delay(100 * no_timeScale);
     digitalWrite(pin_Q1, LOW);
     digitalWrite(pin_Q2, HIGH);
-    delay(100);
+    delay(100 * no_timeScale);
     i--;
   }
   digitalWrite(pin_Q2, LOW);
@@ -460,10 +468,10 @@ void offCalib(){
   while(i){
     digitalWrite(pin_Q1, HIGH);
     digitalWrite(pin_brakeLED, LOW);
-    delay(100);
+    delay(100 * no_timeScale);
     digitalWrite(pin_Q1, LOW);
     digitalWrite(pin_brakeLED, HIGH);
-    delay(100);
+    delay(100 * no_timeScale);
     i--;
   }
 
@@ -475,13 +483,14 @@ void offCalib(){
 }
 
 uint16_t pulseAvgr(){
-  int i = 50;
-  uint16_t us_meanTime = pulseIn(pin_radio, HIGH, us_dutyCycle);
+  uint8_t i = 50;
+  uint16_t us_meanTime = pulseIn(pin_radio, HIGH, (us_dutyCycle * no_timeScale)) / no_timeScale;
   
   while(i){
-    uint16_t us_pulseTime = pulseIn(pin_radio, HIGH, us_dutyCycle);
+    uint16_t us_pulseTime = pulseIn(pin_radio, HIGH, (us_dutyCycle * no_timeScale)) / no_timeScale;
     us_meanTime = (0.9*us_meanTime) + (0.1*us_pulseTime);
     i--;
+    delay(4 * no_timeScale);
   }
   
   return us_meanTime;
