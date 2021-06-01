@@ -45,23 +45,23 @@ const uint8_t us_neutOffset = 3; //dead zone for neutral
 
 //these settings are eeprom reset defaults
 //or are loaded from calibration memory
-uint8_t us_maxFwd = 250; //2000
-uint8_t us_neutral = 187; //1500
-uint8_t us_maxRev = 125; //1000
-uint8_t us_radOff = 187; //1493
+volatile uint8_t us_maxFwd = 250; //2000
+volatile uint8_t us_neutral = 187; //1500
+volatile uint8_t us_maxRev = 125; //1000
+volatile uint8_t us_radOff = 187; //1493
 
-uint8_t us_minFwd = us_neutral + us_neutOffset;
-uint8_t us_minRev = us_neutral - us_neutOffset;
+volatile uint8_t us_minFwd = us_neutral + us_neutOffset;
+volatile uint8_t us_minRev = us_neutral - us_neutOffset;
 
-bool flag_rev = false;
-bool flag_calib = false;
+volatile bool flag_rev = false;
+volatile bool flag_calib = false;
 
-int ms_revTimer = 0; //needs to go negative
-uint8_t us_meanTime = 0;
+volatile int ms_revTimer = 0; //needs to go negative
+volatile uint8_t us_meanTime = 0;
 
-uint8_t no_pulseLeft = 0;
-uint8_t no_revTaps = 0;
-uint8_t no_timeOutCount = 0;
+volatile uint8_t no_pulseLeft = 0;
+volatile uint8_t no_revTaps = 0;
+volatile uint8_t no_timeOutCount = 0;
 
 //interrupt vars
 volatile uint16_t ms_timeOuts = 0;
@@ -179,7 +179,7 @@ void evalPulse(uint8_t us_pulseTime){
 }
 
 void evalCalib(uint8_t us_pulseTime){
-  //check if in calib mode
+  digitalWrite(pin_brakeLED, HIGH);
   //if it's 0 it gets evaluated, tough titties
   if(us_meanTime == 0){ //store pulse1
     us_meanTime = us_pulseTime; 
@@ -188,11 +188,12 @@ void evalCalib(uint8_t us_pulseTime){
     us_meanTime = (0.9*us_meanTime) + (0.1*us_pulseTime);
     no_pulseLeft--;
   }
+  digitalWrite(pin_brakeLED, LOW);
 }
 
 void evalSpeed(uint8_t us_pulseTime){
   //neutral if read bad or transmitter off
-  if(us_pulseTime == 0 || us_pulseTime == us_radOff + 2 || us_pulseTime == us_radOff - 2){
+  if(us_pulseTime == 0 || ( us_pulseTime <= us_radOff + 1 && us_pulseTime >= us_radOff - 1)){
     
     if(no_timeOutCount == no_timeOuts){
       neutral();
@@ -573,11 +574,12 @@ uint16_t pulseAvgr(uint8_t no_pulses){
     //https://youtu.be/3gWTTQWrB3I?t=16
   }
 
-  flag_calib = false;
-  
   //stop interrupt
-  MCUCR &= ~_BV(ISC00);
+  //GIMSK = 0;
+  GIMSK &= ~_BV(INT0);
   
+  flag_calib = false;
+    
   //stop timer
   TCCR1 = 0; //stop the timer
   TCNT1 = 0; //zero timer count
