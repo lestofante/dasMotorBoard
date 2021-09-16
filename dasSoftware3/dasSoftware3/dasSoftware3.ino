@@ -24,7 +24,7 @@
 #include <EEPROM.h>
 
 //eeprom version
-const uint8_t no_secret = 5;
+const uint8_t no_secret = 2;
 
 //ms are in ms
 const uint8_t ms_loopTime = 15; //duty cycle falling edge to falling edge
@@ -40,7 +40,7 @@ const uint8_t no_maxOffset = 240; //assert full throttle (255) after this num
 const uint8_t no_pulseAvg = 50;
 
 //us times in uS are us/8
-const uint8_t us_weenieRev = 165; //partial throttle for reverse cause I'm a weenie
+const uint8_t us_weenieRev = 200; //partial throttle for reverse cause I'm a weenie
 const uint8_t us_neutOffset = 3; //dead zone for neutral
 
 //these settings are eeprom reset defaults
@@ -115,6 +115,8 @@ void loop(){
 void initPWM(){
   //might want to set wgm as well.
   TCCR0B |= _BV(CS00);
+  TCCR0B &= ~_BV(CS01);
+  TCCR0B &= ~_BV(CS02);
 }
 
 void initINT(){
@@ -340,11 +342,12 @@ void forward(uint8_t rate){
     mappedSpeed = 255;
   }
 
-  digitalWrite(pin_Q1, 1);
+
   digitalWrite(pin_Q2, 0);
   digitalWrite(pin_Q3, 0);
   analogWrite(pin_Q4, mappedSpeed);
-
+  digitalWrite(pin_Q1, 1);
+  
   digitalWrite(pin_brakeLED, LOW);
 }
 
@@ -363,12 +366,11 @@ void brake(uint8_t rate){
   if(mappedSpeed >= no_maxOffset){
     mappedSpeed = 255;
   }
-
-  digitalWrite(pin_Q1, 0);
   digitalWrite(pin_Q2, 0);
-  digitalWrite(pin_Q3, 1);
+  digitalWrite(pin_Q1, 0);
   analogWrite(pin_Q4, mappedSpeed);
-
+  digitalWrite(pin_Q3, 1);
+  
   digitalWrite(pin_brakeLED, HIGH);
 }
 
@@ -386,9 +388,9 @@ void reverse(uint8_t rate){
   mappedSpeed = 255 - map(mappedSpeed, us_maxRev, us_minRev, 0, 255);
   
   digitalWrite(pin_Q1, 0);
-  digitalWrite(pin_Q2, 1);
-  analogWrite(pin_Q3, mappedSpeed);
   digitalWrite(pin_Q4, 0);
+  analogWrite(pin_Q3, mappedSpeed);
+  digitalWrite(pin_Q2, 1);
 
   digitalWrite(pin_brakeLED, LOW);
 }
