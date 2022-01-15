@@ -9,7 +9,6 @@
   if that timer rolls over return a 0
   pulse goes low time is stored/acted on, timer runs in 1ms mode 
   1ms compare to 30, if expries return 0
-
   pinout:
   Pin7 (PB2)  Radio IN
   Pin2 (PB3)  Q1 (fwd LED)
@@ -76,8 +75,57 @@ const int pin_Q4 = 1;
 const int pin_radio = 2;
 const int pin_brakeLED = 5;
 
+//=================interrupt handlingh=================
+volatile uint16_t intLastHigh = 0;
+volatile uint16_t intLastDuration = 0;
+volatile bool intNewRead = false;
+
+void pinChange(){ // called by ISR(INT0_vect) 
+  if(digitalRead(pin_radio)){
+    intLastHigh = micros();
+  }else{
+    intLastDuration = micros() - intLastHigh;
+    intNewRead = true;
+  }
+}
+
+//=================interrupt to main=================
+
+const uint16_t MAX_DURATION = 2000;
+const uint16_t TIMEOUT_PULSE = 50000;
+
+int getPulseDuration(){
+  // make sure that even with timeout,
+  // this function return once every TIMEOUT_PULSE
+  static uint16_t startTimeout = intLastHigh;
+
+  // wait for a new read or timeout
+  while (!intNewRead){
+    if (micros() - startTimeout >= TIMEOUT_PULSE){
+      startTimeout += TIMEOUT_PULSE; //make sure this function return at TIMEOUT_PULSE
+      // timeout!
+      return 0;
+    }
+  }
+  // consume the read
+  intNewRead = false;
+
+  // reset timeout
+  startTimeout = intLastHigh;
+  
+  //copy the values so we can work in a "frozen state"
+  uint16_t lastDuration = intLastDuration;
+    
+  if (lastDuration <= MAX_DURATION){
+    return lastDuration;
+  }else{
+    // timeout!
+    return 0;
+  }
+}
 
 //=================Setup=================
+
 void setup(){
   //pins
   pinMode(pin_Q1,OUTPUT);
@@ -104,11 +152,14 @@ void setup(){
   
   //timers
   initPWM();
-  initINT();
+  attachInterrupt(INT0, pinChange, CHANGE);
 }
-//=================LOOP=================
+
+//=================Loop=================
+
 void loop(){
- //https://youtu.be/3gWTTQWrB3I?t=16
+  //if we are here the evaluation has already happen, so we can call directly evalSpeed
+  evalSpeed(getPulseDuration());
 }
 
 //=================Time/interrupt Setup=================
@@ -117,80 +168,6 @@ void initPWM(){
   TCCR0B |= _BV(CS00);
   TCCR0B &= ~_BV(CS01);
   TCCR0B &= ~_BV(CS02);
-}
-
-void initINT(){
-  //int0 is hard wired to pin 7
-  MCUCR |= _BV(ISC00); //isc00 for any pin change
-  GIMSK = _BV(INT0); //enable interrupt
-  TIMSK &= ~_BV(OCIE1A); //stop compare A interrupt
-  TIMSK |= _BV(TOIE1);   //start overflow interrupt
-}
-
-//=================Timer0 modes=================
-void initFST(){
-  TCCR1 = 0; //stop the timer
-  TCNT1 = 0; //zero timer count
-  TCCR1 = _BV(CS12) | _BV(CS11) | _BV(CS10); //count goes up 8us/tick
-}
-
-void initSLO(){
-  TCCR1 = 0; //stop the timer
-  ms_timeOuts = 0; //reset timeout counter
-  evalPulse(TCNT1); //shove pulse width somewhere
-  TCNT1 = 0; //zero timer count
-  TCCR1 = _BV(CS12) | _BV(CS11); //overflow every 1.02ms
-}
-
-//=================ISRs=================
-ISR(INT0_vect){
-//  PINB |= _BV(PINB4);
-  if(digitalRead(pin_radio)){
-    initFST();
-  }else{
-    initSLO();
-  }
-}
-
-//triggers > 2024us when in fast mode
-//triggers every 1.024ms when in slow mode
-ISR(TIMER1_OVF_vect){
-  if(digitalRead(pin_radio)){
-    evalPulse(0);
-  }else if(ms_timeOuts < ms_timeOut){
-    ms_timeOuts++;
-  }else if(ms_timeOuts >= ms_timeOut){
-    ms_timeOuts = 0;
-    evalPulse(0);
-  }
-}
-
-//compA is just keeping if statements out of my ISRs
-//if accuracy was important all 3 could use this register
-ISR(TIMER1_COMPA_vect){
-  ms_timeOuts++;
-}
-
-//=================PWM SETTER=================
-void evalPulse(uint8_t us_pulseTime){
-  if(flag_calib){
-    evalCalib(us_pulseTime);
-  }else{
-    evalSpeed(us_pulseTime);
-  }
-}
-
-void evalCalib(uint8_t us_pulseTime){
-  digitalWrite(pin_brakeLED, HIGH);
-  //if it's 0 it gets evaluated, tough titties
-  if(us_meanTime == 0){ //store pulse1
-    us_meanTime = us_pulseTime; 
-    no_pulseLeft--;
-  }else{
-    us_meanTime = (0.9*us_meanTime) + (0.1*us_pulseTime);
-    no_pulseLeft--;
-  }
-  digitalWrite(pin_brakeLED, LOW);
 }
 
 void evalSpeed(uint8_t us_pulseTime){
@@ -281,32 +258,14 @@ void writeCalib(){
 }
 
 //=================Display Functions=================
-//alternate delay for LED flashing
-//this is not to be used in the main code
-void delay1(uint16_t ms_delayTime){
-  TCCR1 = 0; //stop the timer
-  TCNT1 = 0; //zero timer count
-  ms_timeOuts = 0; //reset timeout counter
-  OCR1C = 250; // (250) 1a goes off before overflow 1.000ms!
-  OCR1A = 250;
-  TIMSK &= ~_BV(TOIE1); //stop the overflow interrupt
-  TIMSK |= _BV(OCIE1A); //set compare A interrupt
-  TCCR1 = _BV(CTC1) | _BV(CS12) | _BV(CS11); //reset tcnt on comp and div by 32
-  
-  while(ms_timeOuts < ms_delayTime){
-    //https://youtu.be/3gWTTQWrB3I?t=16
-  }
-  
-  TCCR1 = 0; //stop the timer
-}
 
 //flashes brake LED, each flash is 400ms
 void flashies(uint8_t i){
   while(i){
     digitalWrite(pin_brakeLED, HIGH);
-    delay1(200);
+    delay(200);
     digitalWrite(pin_brakeLED, LOW);
-    delay1(200);
+    delay(200);
     i--;
   }
 }
@@ -416,17 +375,17 @@ void calibMode(){
   uint8_t i = 3;
   while(i){
     digitalWrite(pin_Q1, HIGH);
-    delay1(50);
+    delay(50);
     digitalWrite(pin_Q1, LOW);
-    delay1(50);
+    delay(50);
     digitalWrite(pin_Q2, HIGH);
-    delay1(50);
+    delay(50);
     digitalWrite(pin_Q2, LOW);
-    delay1(50);
+    delay(50);
     digitalWrite(pin_brakeLED, HIGH);
-    delay1(50);
+    delay(50);
     digitalWrite(pin_brakeLED, LOW);
-    delay1(50);
+    delay(50);
     i--;
   }
   
@@ -441,10 +400,10 @@ void neutralCalib(){
   while(!digitalRead(pin_brakeLED)){ 
     digitalWrite(pin_Q1, HIGH);
     digitalWrite(pin_Q2, HIGH);
-    delay1(100);
+    delay(100);
     digitalWrite(pin_Q1, LOW);
     digitalWrite(pin_Q2, LOW);
-    delay1(100);
+    delay(100);
   }
 
   //user released, acknowledge
@@ -452,10 +411,10 @@ void neutralCalib(){
   while(i){
     digitalWrite(pin_Q1, HIGH);
     digitalWrite(pin_Q2, HIGH);
-    delay1(100);
+    delay(100);
     digitalWrite(pin_Q1, LOW);
     digitalWrite(pin_Q2, LOW);
-    delay1(100);
+    delay(100);
     i--;
   }
 
@@ -472,18 +431,18 @@ void fwdCalib(){
   //indicate fwd test
   while(!digitalRead(pin_brakeLED)){ 
     digitalWrite(pin_Q1, HIGH);
-    delay1(100);
+    delay(100);
     digitalWrite(pin_Q1, LOW);
-    delay1(100);
+    delay(100);
   }
 
   //user released, acknowledge
   uint8_t i = 8;   
   while(i){
     digitalWrite(pin_Q1, HIGH);
-    delay1(100);
+    delay(100);
     digitalWrite(pin_Q1, LOW);
-    delay1(100);
+    delay(100);
     i--;
   }
 
@@ -500,18 +459,18 @@ void revCalib(){
   //indicate rev test
   while(!digitalRead(pin_brakeLED)){ 
     digitalWrite(pin_Q2, HIGH);
-    delay1(100);
+    delay(100);
     digitalWrite(pin_Q2, LOW);
-    delay1(100);
+    delay(100);
   }
 
   //user released, acknowledge
   uint8_t i = 8;
   while(i){
     digitalWrite(pin_Q2, HIGH);
-    delay1(100);
+    delay(100);
     digitalWrite(pin_Q2, LOW);
-    delay1(100);
+    delay(100);
     i--;
   }
 
@@ -530,10 +489,10 @@ void offCalib(){
   while(!digitalRead(pin_brakeLED)){
     digitalWrite(pin_Q1, HIGH);
     digitalWrite(pin_Q2, LOW);
-    delay1(100);
+    delay(100);
     digitalWrite(pin_Q1, LOW);
     digitalWrite(pin_Q2, HIGH);
-    delay1(100);
+    delay(100);
     i--;
   }
   digitalWrite(pin_Q2, LOW);
@@ -546,10 +505,10 @@ void offCalib(){
   while(i){
     digitalWrite(pin_Q1, HIGH);
     digitalWrite(pin_brakeLED, LOW);
-    delay1(100);
+    delay(100);
     digitalWrite(pin_Q1, LOW);
     digitalWrite(pin_brakeLED, HIGH);
-    delay1(100);
+    delay(100);
     i--;
   }
 
@@ -560,31 +519,12 @@ void offCalib(){
 }
 
 uint16_t pulseAvgr(uint8_t no_pulses){
-  //zero out mean time
-  us_meanTime = 0;
   
-  //stop timer
-  TCCR1 = 0; //stop the timer
-  TCNT1 = 0; //zero timer count
+  uint16_t us_meanTime = getPulseDuration();
   
-  no_pulseLeft = no_pulses; //start counting
-  flag_calib = true;
-   
-  initINT(); //start the interrupter
-  
-  while(no_pulseLeft){
-    //https://youtu.be/3gWTTQWrB3I?t=16
+  while (--no_pulses){
+    us_meanTime = (0.9*us_meanTime) + (0.1*getPulseDuration());
   }
-
-  //stop interrupt
-  //GIMSK = 0;
-  GIMSK &= ~_BV(INT0);
-  
-  flag_calib = false;
-    
-  //stop timer
-  TCCR1 = 0; //stop the timer
-  TCNT1 = 0; //zero timer count
   
   return us_meanTime;
 }
